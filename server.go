@@ -31,6 +31,7 @@ type TaskInfo struct {
 	ID        int     `json:"id"`
 	Text      string  `json:"text"`
 	StartDate string  `db:"start_date" json:"start_date"`
+	Type      string  `json:"type"`
 	Duration  int     `json:"duration"`
 	Parent    int     `json:"parent"`
 	Progress  float32 `json:"progress"`
@@ -217,6 +218,7 @@ var whitelistTask = []string{
 	"progress",
 	"open", /* ! */
 	"details",
+	"type",
 }
 var whitelistLink = []string{
 	"source",
@@ -239,6 +241,8 @@ func sendUpdateQuery(table string, form url.Values, id string) error {
 	for _, key := range allowedFields {
 		value, ok := form[key]
 		if ok {
+			key, value[0] = boolToInt(key, value[0])
+
 			qs += key + " = ?, "
 			params = append(params, value[0])
 		}
@@ -258,6 +262,8 @@ func sendInsertQuery(table string, form map[string][]string) (sql.Result, error)
 	for _, key := range allowedFields {
 		value, ok := form[key]
 		if ok {
+			key, value[0] = boolToInt(key, value[0])
+
 			qsk += key + ", "
 			qsv += "?, "
 			params = append(params, value[0])
@@ -269,4 +275,19 @@ func sendInsertQuery(table string, form map[string][]string) (sql.Result, error)
 
 	res, err := conn.Exec(qsk+qsv, params...)
 	return res, err
+}
+
+func boolToInt(name string, value string) (string, string) {
+	// OPEN is a reserved word in MySQL
+	if name == "open" {
+		name = "opened"
+
+		if value == "true" {
+			value = "1"
+		} else {
+			value = "0"
+		}
+	}
+
+	return name, value
 }
