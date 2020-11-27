@@ -37,6 +37,7 @@ type TaskInfo struct {
 	Progress  float32 `json:"progress"`
 	Open      int     `db:"opened" json:"open"`
 	Details   string  `json:"details"`
+	Position  int     `json:"position"`
 }
 
 type LinkInfo struct {
@@ -219,6 +220,7 @@ var whitelistTask = []string{
 	"open", /* ! */
 	"details",
 	"type",
+	"position",
 }
 var whitelistLink = []string{
 	"source",
