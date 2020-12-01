@@ -35,7 +35,7 @@ type TaskInfo struct {
 	Duration  int     `json:"duration"`
 	Parent    int     `json:"parent"`
 	Progress  float32 `json:"progress"`
-	Open      int     `db:"opened" json:"open"`
+	Opened    int     `json:"opened"`
 	Details   string  `json:"details"`
 }
 
@@ -216,7 +216,7 @@ var whitelistTask = []string{
 	"duration",
 	"parent",
 	"progress",
-	"open", /* ! */
+	"opened",
 	"details",
 	"type",
 }
@@ -241,11 +241,6 @@ func sendUpdateQuery(table string, form url.Values, id string) error {
 	for _, key := range allowedFields {
 		value, ok := form[key]
 		if ok {
-			// OPEN is a reserved word in MySQL
-			if key == "open" {
-				key = "opened"
-			}
-
 			qs += key + " = ?, "
 			params = append(params, value[0])
 		}
@@ -265,11 +260,6 @@ func sendInsertQuery(table string, form map[string][]string) (sql.Result, error)
 	for _, key := range allowedFields {
 		value, ok := form[key]
 		if ok {
-			// OPEN is a reserved word in MySQL
-			if key == "open" {
-				key = "opened"
-			}
-
 			qsk += key + ", "
 			qsv += "?, "
 			params = append(params, value[0])
