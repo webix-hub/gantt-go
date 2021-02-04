@@ -21,12 +21,14 @@ import (
 
 var format = render.New()
 
+// Response is a general server response
 type Response struct {
 	Invalid bool   `json:"invalid"`
 	Error   string `json:"error"`
 	ID      string `json:"id"`
 }
 
+// TaskInfo describes a task
 type TaskInfo struct {
 	ID        int     `json:"id"`
 	Text      string  `json:"text"`
@@ -40,6 +42,7 @@ type TaskInfo struct {
 	Position  int     `json:"position"`
 }
 
+// LinkInfo describes a link between two tasks
 type LinkInfo struct {
 	ID     int `json:"id"`
 	Source int `json:"source"`
@@ -47,8 +50,26 @@ type LinkInfo struct {
 	Type   int `json:"type"`
 }
 
+// Assignment describes a resource allocated to a task
+type Assignment struct {
+	ID       int `json:"id"`
+	Task     int `json:"task"`
+	Resource int `json:"resource"`
+	Value    int `json:"value"`
+}
+
+// Resource describes a department, person or other work resource
+type Resource struct {
+	ID     int    `json:"id"`
+	Text   string `json:"text"`
+	Parent int    `json:"parent"`
+	Avatar string `json:"avatar"`
+	Unit   string `json:"unit"`
+}
+
 var conn *sqlx.DB
 
+// AppConfig describes settings for this backend app
 type AppConfig struct {
 	Port         string
 	ResetOnStart bool
@@ -56,6 +77,7 @@ type AppConfig struct {
 	DB DBConfig
 }
 
+// DBConfig describes settings for the database
 type DBConfig struct {
 	Host     string `default:"localhost"`
 	Port     string `default:"3306"`
@@ -64,6 +86,7 @@ type DBConfig struct {
 	Database string `default:"projects"`
 }
 
+// Config is the structure that stores the settings for this backend app
 var Config AppConfig
 
 func main() {
@@ -206,6 +229,68 @@ func main() {
 		format.JSON(w, 200, Response{ID: strconv.FormatInt(id, 10)})
 	})
 
+	r.Get("/resources", func(w http.ResponseWriter, r *http.Request) {
+		data := make([]Resource, 0)
+
+		err := conn.Select(&data, "SELECT resource.* FROM resource;")
+		if err != nil {
+			format.Text(w, 500, err.Error())
+			return
+		}
+
+		format.JSON(w, 200, data)
+	})
+
+	r.Get("/assignments", func(w http.ResponseWriter, r *http.Request) {
+		data := make([]Assignment, 0)
+
+		err := conn.Select(&data, "SELECT assignment.* FROM assignment;")
+		if err != nil {
+			format.Text(w, 500, err.Error())
+			return
+		}
+
+		format.JSON(w, 200, data)
+	})
+
+	r.Put("/assignments/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		r.ParseForm()
+
+		err := sendUpdateQuery("assignment", r.Form, id)
+		if err != nil {
+			format.Text(w, 500, err.Error())
+			return
+		}
+
+		format.JSON(w, 200, Response{ID: id})
+	})
+
+	r.Delete("/assignments/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+
+		_, err := conn.Exec("DELETE FROM assignment WHERE id = ?", id)
+		if err != nil {
+			format.Text(w, 500, err.Error())
+			return
+		}
+
+		format.JSON(w, 200, Response{ID: id})
+	})
+
+	r.Post("/assignments", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+
+		res, err := sendInsertQuery("assignment", r.Form)
+		if err != nil {
+			format.Text(w, 500, err.Error())
+			return
+		}
+
+		id, _ := res.LastInsertId()
+		format.JSON(w, 200, Response{ID: strconv.FormatInt(id, 10)})
+	})
+
 	log.Printf("Starting webserver at port " + Config.Port)
 	http.ListenAndServe(Config.Port, r)
 }
@@ -227,12 +312,20 @@ var whitelistLink = []string{
 	"target",
 	"type",
 }
+var whiteListAssignment = []string{
+	"task",
+	"resource",
+	"value",
+}
 
 func getWhiteList(table string) []string {
-	if table == "task" {
+	switch table {
+	case "task":
 		return whitelistTask
+	case "link":
+		return whitelistLink
 	}
-	return whitelistLink
+	return whiteListAssignment
 }
 
 func sendUpdateQuery(table string, form url.Values, id string) error {
