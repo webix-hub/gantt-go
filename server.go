@@ -58,13 +58,20 @@ type Assignment struct {
 	Value    int `json:"value"`
 }
 
-// Resource describes a department, person or other work resource
+// Resource describes a person or other work resource
 type Resource struct {
-	ID     int    `json:"id"`
-	Text   string `json:"text"`
-	Parent int    `json:"parent"`
-	Avatar string `json:"avatar"`
-	Unit   string `json:"unit"`
+	ID         int    `json:"id"`
+	Name       string `json:"name"`
+	Department int    `json:"department"`
+	Avatar     string `json:"avatar"`
+	Unit       string `json:"unit"`
+}
+
+// Department describes a department or a company
+type Department struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+	Unit string `json:"unit"`
 }
 
 var conn *sqlx.DB
@@ -127,7 +134,7 @@ func main() {
 	r.Get("/tasks", func(w http.ResponseWriter, r *http.Request) {
 		data := make([]TaskInfo, 0)
 
-		err := conn.Select(&data, "SELECT task.* FROM task ORDER BY start_date;")
+		err := conn.Select(&data, "SELECT task.* FROM task ORDER BY start_date")
 		if err != nil {
 			format.Text(w, 500, err.Error())
 			return
@@ -232,7 +239,19 @@ func main() {
 	r.Get("/resources", func(w http.ResponseWriter, r *http.Request) {
 		data := make([]Resource, 0)
 
-		err := conn.Select(&data, "SELECT resource.* FROM resource;")
+		err := conn.Select(&data, "SELECT resource.* FROM resource")
+		if err != nil {
+			format.Text(w, 500, err.Error())
+			return
+		}
+
+		format.JSON(w, 200, data)
+	})
+
+	r.Get("/departments", func(w http.ResponseWriter, r *http.Request) {
+		data := make([]Department, 0)
+
+		err := conn.Select(&data, "SELECT department.* FROM department")
 		if err != nil {
 			format.Text(w, 500, err.Error())
 			return
@@ -244,7 +263,7 @@ func main() {
 	r.Get("/assignments", func(w http.ResponseWriter, r *http.Request) {
 		data := make([]Assignment, 0)
 
-		err := conn.Select(&data, "SELECT assignment.* FROM assignment;")
+		err := conn.Select(&data, "SELECT assignment.* FROM assignment")
 		if err != nil {
 			format.Text(w, 500, err.Error())
 			return
