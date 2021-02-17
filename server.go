@@ -62,13 +62,13 @@ type Assignment struct {
 type Resource struct {
 	ID         int    `json:"id"`
 	Name       string `json:"name"`
-	Department int    `json:"department"`
+	CategoryID int    `json:"category_id" db:"category_id"`
 	Avatar     string `json:"avatar"`
 	Unit       string `json:"unit"`
 }
 
-// Department describes a department or a company
-type Department struct {
+// Category describes a department of a company or a category of non-human resources
+type Category struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
 	Unit string `json:"unit"`
@@ -248,10 +248,10 @@ func main() {
 		format.JSON(w, 200, data)
 	})
 
-	r.Get("/departments", func(w http.ResponseWriter, r *http.Request) {
-		data := make([]Department, 0)
+	r.Get("/categories", func(w http.ResponseWriter, r *http.Request) {
+		data := make([]Category, 0)
 
-		err := conn.Select(&data, "SELECT department.* FROM department")
+		err := conn.Select(&data, "SELECT category.* FROM category")
 		if err != nil {
 			format.Text(w, 500, err.Error())
 			return
