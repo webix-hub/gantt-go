@@ -169,6 +169,11 @@ func main() {
 			format.Text(w, 500, err.Error())
 			return
 		}
+		_, err = conn.Exec("DELETE FROM assignment WHERE task = ?", id)
+		if err != nil {
+			format.Text(w, 500, err.Error())
+			return
+		}
 
 		format.JSON(w, 200, Response{ID: id})
 	})
