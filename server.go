@@ -25,14 +25,14 @@ var format = render.New()
 type Response struct {
 	Invalid bool   `json:"invalid"`
 	Error   string `json:"error"`
-	ID      string `json:"id"`
+	ID      int `json:"id"`
 }
 
 type AddResponse struct {
 	Invalid bool   `json:"invalid"`
 	Error   string `json:"error"`
-	ID      string `json:"id"`
-	Sibling string `json:"sibling"`
+	ID      int `json:"id"`
+	Sibling int `json:"sibling"`
 }
 
 // TaskInfo describes a task
@@ -152,7 +152,7 @@ func main() {
 	})
 
 	r.Put("/tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
+		id := NumberParam(r, "id")
 		r.ParseForm()
 
 		err = sendUpdateQuery("task", r.Form, id)
@@ -165,7 +165,7 @@ func main() {
 	})
 
 	r.Delete("/tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
+		id := NumberParam(r, "id")
 
 		_, err := conn.Exec("DELETE FROM task WHERE id = ? OR parent = ?", id, id)
 		if err != nil {
@@ -190,7 +190,7 @@ func main() {
 		r.ParseForm()
 
 		split := r.Form.Get("split")
-		var sibling int64
+		var sibling int
 		if split == "true" {
 			parent := r.Form.Get("parent")
 			sibling, err = splitTask(parent)
@@ -207,7 +207,7 @@ func main() {
 		}
 
 		id, _ := res.LastInsertId()
-		format.JSON(w, 200, AddResponse{ID: strconv.FormatInt(id, 10), Sibling: strconv.FormatInt(sibling, 10)})
+		format.JSON(w, 200, AddResponse{ID: int(id), Sibling: sibling })
 	})
 
 	r.Get("/links", func(w http.ResponseWriter, r *http.Request) {
@@ -223,7 +223,7 @@ func main() {
 	})
 
 	r.Put("/links/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
+		id := NumberParam(r, "id")
 		r.ParseForm()
 
 		err := sendUpdateQuery("link", r.Form, id)
@@ -236,7 +236,7 @@ func main() {
 	})
 
 	r.Delete("/links/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
+		id := NumberParam(r, "id")
 
 		_, err := conn.Exec("DELETE FROM link WHERE id = ?", id)
 		if err != nil {
@@ -257,7 +257,7 @@ func main() {
 		}
 
 		id, _ := res.LastInsertId()
-		format.JSON(w, 200, Response{ID: strconv.FormatInt(id, 10)})
+		format.JSON(w, 200, Response{ID: int(id)})
 	})
 
 	r.Get("/resources", func(w http.ResponseWriter, r *http.Request) {
@@ -297,7 +297,7 @@ func main() {
 	})
 
 	r.Put("/assignments/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
+		id := NumberParam(r, "id")
 		r.ParseForm()
 
 		err := sendUpdateQuery("assignment", r.Form, id)
@@ -310,7 +310,7 @@ func main() {
 	})
 
 	r.Delete("/assignments/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
+		id := NumberParam(r, "id")
 
 		_, err := conn.Exec("DELETE FROM assignment WHERE id = ?", id)
 		if err != nil {
@@ -331,7 +331,7 @@ func main() {
 		}
 
 		id, _ := res.LastInsertId()
-		format.JSON(w, 200, Response{ID: strconv.FormatInt(id, 10)})
+		format.JSON(w, 200, Response{ID: int(id)})
 	})
 
 	log.Printf("Starting webserver at port " + Config.Port)
@@ -372,7 +372,7 @@ func getWhiteList(table string) []string {
 	return whiteListAssignment
 }
 
-func sendUpdateQuery(table string, form url.Values, id string) error {
+func sendUpdateQuery(table string, form url.Values, id int) error {
 	qs := "UPDATE " + table + " SET "
 	params := make([]interface{}, 0)
 
@@ -412,9 +412,7 @@ func sendInsertQuery(table string, form map[string][]string) (sql.Result, error)
 	return res, err
 }
 
-func splitTask(parent string) (int64, error) {
-	var sibling int64
-
+func splitTask(parent string) (int, error) {
 	// update parent - set it as project and render split
 	_, err := conn.Exec("UPDATE task SET type = 'project', render = 'split' WHERE id = ?", parent)
 	if err != nil {
@@ -430,11 +428,17 @@ func splitTask(parent string) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		sibling, err = res.LastInsertId()
-		if err != nil {
-			return 0, err
-		}
+		sibling, err := res.LastInsertId()
+		return int(sibling), err
 	}
 
-	return sibling, nil
+	return 0, nil
+}
+
+
+func NumberParam(r *http.Request, key string) int {
+	id := chi.URLParam(r, key)
+	num, _ := strconv.Atoi(id)
+
+	return num
 }
