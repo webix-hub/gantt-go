@@ -209,7 +209,7 @@ func main() {
 		id, _ := res.LastInsertId()
 
 		mode := r.Form.Get("mode")
-		parent := NumberFromForm(r.Form, "parent")
+		parent := NumberFromForm(r.Form, "parent", 0)
 
 		err = setPosition(int(id), mode, parent)
 		if err != nil {
@@ -225,8 +225,8 @@ func main() {
 		r.ParseForm()
 
 		id := NumberParam(r, "id")
-		target := NumberFromForm(r.Form, "target")
-		parent := NumberFromForm(r.Form, "parent")
+		target := NumberFromForm(r.Form, "target", 0)
+		parent := NumberFromForm(r.Form, "parent", -1)
 		mode := r.Form.Get("mode")
 
 		err := sendMoveQuery(id, mode, target, parent)
@@ -392,7 +392,7 @@ func sendMoveQuery(id int, mode string, target, parent int) error{
 
 	var relatedPosition, relatedParent int
 	relatedParent = parent
-	if relatedParent == 0 {
+	if relatedParent == -1 {
 		relatedParent = baseParent
 	}
 
@@ -544,9 +544,11 @@ func NumberParam(r *http.Request, key string) int {
 	return num
 }
 
-func NumberFromForm(r url.Values, key string) int {
+func NumberFromForm(r url.Values, key string, defValue int) int {
 	value := r.Get(key)
+	if value == "" {
+		return defValue
+	}
 	num, _ := strconv.Atoi(value)
-
 	return num
 }
