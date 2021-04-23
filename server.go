@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -46,7 +47,7 @@ type TaskInfo struct {
 	Progress  float32 `json:"progress"`
 	Opened    int     `json:"opened"`
 	Details   string  `json:"details"`
-	Position  int     `json:"position"`
+	Position  int     `json:"-"`
 	Render    string  `json:"render"`
 }
 
@@ -142,7 +143,7 @@ func main() {
 	r.Get("/tasks", func(w http.ResponseWriter, r *http.Request) {
 		data := make([]TaskInfo, 0)
 
-		err := conn.Select(&data, "SELECT task.* FROM task ORDER BY start_date")
+		err := conn.Select(&data, "SELECT task.* FROM task ORDER BY parent, position")
 		if err != nil {
 			format.Text(w, 500, err.Error())
 			return
@@ -205,9 +206,36 @@ func main() {
 			format.Text(w, 500, err.Error())
 			return
 		}
-
 		id, _ := res.LastInsertId()
+
+		mode := r.Form.Get("mode")
+		parent := NumberFromForm(r.Form, "parent")
+
+		err = setPosition(int(id), mode, parent)
+		if err != nil {
+			format.Text(w, 500, err.Error())
+			return
+		}
+
+
 		format.JSON(w, 200, AddResponse{ID: int(id), Sibling: sibling })
+	})
+
+	r.Put("/tasks/{id}/position", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+
+		id := NumberParam(r, "id")
+		target := NumberFromForm(r.Form, "target")
+		parent := NumberFromForm(r.Form, "parent")
+		mode := r.Form.Get("mode")
+
+		err := sendMoveQuery(id, mode, target, parent)
+		if err != nil {
+			format.Text(w, 500, err.Error())
+			return
+		}
+
+		format.JSON(w, 200, Response{ID: id})
 	})
 
 	r.Get("/links", func(w http.ResponseWriter, r *http.Request) {
@@ -338,6 +366,80 @@ func main() {
 	http.ListenAndServe(Config.Port, r)
 }
 
+func setPosition(id int, mode string, parent int) error {
+	if mode == "last" {
+		var relatedPosition int
+		row := conn.QueryRow("SELECT MAX(position)+1 from task WHERE parent = ?", parent)
+		row.Scan(&relatedPosition)
+
+		_, err := conn.Exec("UPDATE task SET position = ? WHERE id = ?", relatedPosition, id)
+		return err
+	} else if mode == "first" || mode == "" {
+		_, err := conn.Exec("UPDATE task SET position = position + 1 WHERE parent = ? AND id <> ?", parent, id)
+		return err
+	}
+
+	return errors.New("not supported position mode")
+}
+
+func sendMoveQuery(id int, mode string, target, parent int) error{
+	var basePosition, baseParent int
+	row := conn.QueryRow("SELECT parent, position from task WHERE id = ?", id)
+	err := row.Scan(&baseParent, &basePosition)
+	if err != nil {
+		return err
+	}
+
+	var relatedPosition, relatedParent int
+	relatedParent = parent
+	if relatedParent == 0 {
+		relatedParent = baseParent
+	}
+
+	if mode == "before" || mode == "after" {
+		row := conn.QueryRow("SELECT parent, position from task WHERE id = ?", target)
+		err = row.Scan(&relatedParent, &relatedPosition)
+		if err != nil {
+			return err
+		}
+
+		if mode == "after" {
+			relatedPosition += 1
+		}
+	} else if mode == "last" {
+		row := conn.QueryRow("SELECT MAX(position)+1 from task WHERE parent = ?", parent)
+		row.Scan(&relatedPosition)
+	}
+
+	// source item removing may affect target index
+	if relatedParent == baseParent && (mode == "last" || basePosition < relatedPosition) {
+		relatedPosition -= 1
+	}
+
+	// already in place
+	if relatedParent == baseParent && relatedPosition == basePosition {
+		return nil
+	}
+
+	// removing from source order
+	_, err = conn.Exec("UPDATE task SET position = position - 1 WHERE position > ? AND parent = ?", basePosition, baseParent)
+	if err != nil {
+		return err
+	}
+	// correct target order
+	_, err = conn.Exec("UPDATE task SET position = position + 1 WHERE position >= ? AND parent = ?", relatedPosition, relatedParent)
+	if err != nil {
+		return err
+	}
+	// adding at target position
+	_, err = conn.Exec("UPDATE task SET position = ?, parent = ? WHERE id = ?", relatedPosition, relatedParent, id)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // both task and link tables
 var whitelistTask = []string{
 	"text",
@@ -348,7 +450,6 @@ var whitelistTask = []string{
 	"opened",
 	"details",
 	"type",
-	"position",
 	"render",
 }
 var whitelistLink = []string{
@@ -437,8 +538,15 @@ func splitTask(parent string) (int, error) {
 
 
 func NumberParam(r *http.Request, key string) int {
-	id := chi.URLParam(r, key)
-	num, _ := strconv.Atoi(id)
+	value := chi.URLParam(r, key)
+	num, _ := strconv.Atoi(value)
+
+	return num
+}
+
+func NumberFromForm(r url.Values, key string) int {
+	value := r.Get(key)
+	num, _ := strconv.Atoi(value)
 
 	return num
 }
