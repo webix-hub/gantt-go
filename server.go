@@ -411,6 +411,12 @@ func sendInsertQuery(table string, form map[string][]string) (sql.Result, error)
 func splitTask(parent string, form url.Values) (int64, int64, error) {
 	var sibling int64
 
+	// update parent - set it as type "split"
+	_, err := conn.Exec("UPDATE task SET type = 'split', duration = GREATEST(duration, 1), progress = 0 WHERE id = ?", parent)
+	if err != nil {
+		return 0, 0, err
+	}
+
 	// add a clone-sibling if target parent doesn't already have at least 1 kid
 	var hasKids bool
 	row := conn.QueryRow("SELECT 1 from task WHERE parent = ? ORDER BY NULL LIMIT 1", parent)
@@ -424,12 +430,6 @@ func splitTask(parent string, form url.Values) (int64, int64, error) {
 		if err != nil {
 			return 0, 0, err
 		}
-	}
-
-	// update parent - set it as type "split"
-	_, err := conn.Exec("UPDATE task SET type = 'split', duration = 1, progress = 0  WHERE id = ?", parent)
-	if err != nil {
-		return 0, 0, err
 	}
 
 	res, err := sendInsertQuery("task", form)
