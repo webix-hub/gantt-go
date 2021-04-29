@@ -23,14 +23,11 @@ var format = render.New()
 
 // Response is a general server response
 type Response struct {
-	Invalid bool   `json:"invalid"`
-	Error   string `json:"error"`
-	ID      string `json:"id"`
+	ID string `json:"id"`
 }
 
+// AddResponse is a split task server response
 type AddResponse struct {
-	Invalid bool   `json:"invalid"`
-	Error   string `json:"error"`
 	ID      string `json:"id"`
 	Sibling string `json:"sibling"`
 }
@@ -47,7 +44,6 @@ type TaskInfo struct {
 	Opened    int     `json:"opened"`
 	Details   string  `json:"details"`
 	Position  int     `json:"position"`
-	Render    string  `json:"render"`
 }
 
 // LinkInfo describes a link between two tasks
@@ -164,6 +160,18 @@ func main() {
 		format.JSON(w, 200, Response{ID: id})
 	})
 
+	r.Put("/tasks/{id}/split", func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		r.ParseForm()
+		nid, sibling, err := splitTask(id, r.Form)
+		if err != nil {
+			format.Text(w, 500, err.Error())
+			return
+		}
+
+		format.JSON(w, 200, AddResponse{ID: strconv.FormatInt(nid, 10), Sibling: strconv.FormatInt(sibling, 10)})
+	})
+
 	r.Delete("/tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 
@@ -189,17 +197,6 @@ func main() {
 	r.Post("/tasks", func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
 
-		split := r.Form.Get("split")
-		var sibling int64
-		if split == "true" {
-			parent := r.Form.Get("parent")
-			sibling, err = splitTask(parent)
-			if err != nil {
-				format.Text(w, 500, err.Error())
-				return
-			}
-		}
-
 		res, err := sendInsertQuery("task", r.Form)
 		if err != nil {
 			format.Text(w, 500, err.Error())
@@ -207,7 +204,7 @@ func main() {
 		}
 
 		id, _ := res.LastInsertId()
-		format.JSON(w, 200, AddResponse{ID: strconv.FormatInt(id, 10), Sibling: strconv.FormatInt(sibling, 10)})
+		format.JSON(w, 200, Response{ID: strconv.FormatInt(id, 10)})
 	})
 
 	r.Get("/links", func(w http.ResponseWriter, r *http.Request) {
@@ -349,7 +346,6 @@ var whitelistTask = []string{
 	"details",
 	"type",
 	"position",
-	"render",
 }
 var whitelistLink = []string{
 	"source",
@@ -412,13 +408,13 @@ func sendInsertQuery(table string, form map[string][]string) (sql.Result, error)
 	return res, err
 }
 
-func splitTask(parent string) (int64, error) {
+func splitTask(parent string, form url.Values) (int64, int64, error) {
 	var sibling int64
 
-	// update parent - set it as project and render split
-	_, err := conn.Exec("UPDATE task SET type = 'project', render = 'split' WHERE id = ?", parent)
+	// update parent - set it as type "split"
+	_, err := conn.Exec("UPDATE task SET type = 'split', duration = 1, progress = 0  WHERE id = ?", parent)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
 	// add a clone-sibling if target parent doesn't already have at least 1 kid
@@ -426,15 +422,21 @@ func splitTask(parent string) (int64, error) {
 	row := conn.QueryRow("SELECT 1 from task WHERE parent = ? ORDER BY NULL LIMIT 1", parent)
 	row.Scan(&hasKids)
 	if !hasKids {
-		res, err := conn.Exec("INSERT INTO task (text, start_date, type, duration, parent, progress, opened, details) SELECT text, start_date, 'task', duration, ?, progress, opened, details FROM task WHERE id = ?", parent, parent)
+		res, err := conn.Exec("INSERT INTO task (text, start_date, type, duration, parent, progress, opened, details) SELECT text, start_date, 'task', GREATEST(duration,1), ?, GREATEST(progress, 0), opened, details FROM task WHERE id = ?", parent, parent)
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		sibling, err = res.LastInsertId()
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 	}
 
-	return sibling, nil
+	res, err := sendInsertQuery("task", form)
+	if err != nil {
+		return 0, 0, err
+	}
+	id, _ := res.LastInsertId()
+
+	return id, sibling, nil
 }
