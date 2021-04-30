@@ -24,14 +24,11 @@ var format = render.New()
 
 // Response is a general server response
 type Response struct {
-	Invalid bool   `json:"invalid"`
-	Error   string `json:"error"`
-	ID      int `json:"id"`
+	ID int `json:"id"`
 }
 
+// AddResponse is a split task server response
 type AddResponse struct {
-	Invalid bool   `json:"invalid"`
-	Error   string `json:"error"`
 	ID      int `json:"id"`
 	Sibling int `json:"sibling"`
 }
@@ -48,7 +45,6 @@ type TaskInfo struct {
 	Opened    int     `json:"opened"`
 	Details   string  `json:"details"`
 	Position  int     `json:"-"`
-	Render    string  `json:"render"`
 }
 
 // LinkInfo describes a link between two tasks
@@ -165,6 +161,18 @@ func main() {
 		format.JSON(w, 200, Response{ID: id})
 	})
 
+	r.Put("/tasks/{id}/split", func(w http.ResponseWriter, r *http.Request) {
+		id := NumberParam(r, "id")
+		r.ParseForm()
+		nid, sibling, err := splitTask(id, r.Form)
+		if err != nil {
+			format.Text(w, 500, err.Error())
+			return
+		}
+
+		format.JSON(w, 200, AddResponse{ID: nid, Sibling: sibling})
+	})
+
 	r.Delete("/tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := NumberParam(r, "id")
 
@@ -190,17 +198,6 @@ func main() {
 	r.Post("/tasks", func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
 
-		split := r.Form.Get("split")
-		var sibling int
-		if split == "true" {
-			parent := r.Form.Get("parent")
-			sibling, err = splitTask(parent)
-			if err != nil {
-				format.Text(w, 500, err.Error())
-				return
-			}
-		}
-
 		res, err := sendInsertQuery("task", r.Form)
 		if err != nil {
 			format.Text(w, 500, err.Error())
@@ -217,8 +214,7 @@ func main() {
 			return
 		}
 
-
-		format.JSON(w, 200, AddResponse{ID: int(id), Sibling: sibling })
+		format.JSON(w, 200, Response{ID: int(id)})
 	})
 
 	r.Put("/tasks/{id}/position", func(w http.ResponseWriter, r *http.Request) {
@@ -382,7 +378,7 @@ func setPosition(id int, mode string, parent int) error {
 	return errors.New("not supported position mode")
 }
 
-func sendMoveQuery(id int, mode string, target, parent int) error{
+func sendMoveQuery(id int, mode string, target, parent int) error {
 	var basePosition, baseParent int
 	row := conn.QueryRow("SELECT parent, position from task WHERE id = ?", id)
 	err := row.Scan(&baseParent, &basePosition)
@@ -450,7 +446,6 @@ var whitelistTask = []string{
 	"opened",
 	"details",
 	"type",
-	"render",
 }
 var whitelistLink = []string{
 	"source",
@@ -513,11 +508,13 @@ func sendInsertQuery(table string, form map[string][]string) (sql.Result, error)
 	return res, err
 }
 
-func splitTask(parent string) (int, error) {
-	// update parent - set it as project and render split
-	_, err := conn.Exec("UPDATE task SET type = 'project', render = 'split' WHERE id = ?", parent)
+func splitTask(parent int, form url.Values) (int, int, error) {
+	var sibling int64
+
+	// update parent - set it as type "split"
+	_, err := conn.Exec("UPDATE task SET type = 'split', duration = GREATEST(duration, 1), progress = 0 WHERE id = ?", parent)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
 	// add a clone-sibling if target parent doesn't already have at least 1 kid
@@ -525,17 +522,24 @@ func splitTask(parent string) (int, error) {
 	row := conn.QueryRow("SELECT 1 from task WHERE parent = ? ORDER BY NULL LIMIT 1", parent)
 	row.Scan(&hasKids)
 	if !hasKids {
-		res, err := conn.Exec("INSERT INTO task (text, start_date, type, duration, parent, progress, opened, details) SELECT text, start_date, 'task', duration, ?, progress, opened, details FROM task WHERE id = ?", parent, parent)
+		res, err := conn.Exec("INSERT INTO task (text, start_date, type, duration, parent, progress, opened, details) SELECT text, start_date, 'task', GREATEST(duration,1), ?, GREATEST(progress,0), opened, details FROM task WHERE id = ?", parent, parent)
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
-		sibling, err := res.LastInsertId()
-		return int(sibling), err
+		sibling, err = res.LastInsertId()
+		if err != nil {
+			return 0, 0, err
+		}
 	}
 
-	return 0, nil
-}
+	res, err := sendInsertQuery("task", form)
+	if err != nil {
+		return 0, 0, err
+	}
+	id, _ := res.LastInsertId()
 
+	return int(id), int(sibling), nil
+}
 
 func NumberParam(r *http.Request, key string) int {
 	value := chi.URLParam(r, key)
