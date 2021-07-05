@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -23,13 +24,13 @@ var format = render.New()
 
 // Response is a general server response
 type Response struct {
-	ID string `json:"id"`
+	ID int `json:"id"`
 }
 
 // AddResponse is a split task server response
 type AddResponse struct {
-	ID      string `json:"id"`
-	Sibling string `json:"sibling"`
+	ID      int `json:"id"`
+	Sibling int `json:"sibling"`
 }
 
 // TaskInfo describes a task
@@ -43,7 +44,7 @@ type TaskInfo struct {
 	Progress  float32 `json:"progress"`
 	Opened    int     `json:"opened"`
 	Details   string  `json:"details"`
-	Position  int     `json:"position"`
+	Position  int     `json:"-"`
 }
 
 // LinkInfo describes a link between two tasks
@@ -138,7 +139,7 @@ func main() {
 	r.Get("/tasks", func(w http.ResponseWriter, r *http.Request) {
 		data := make([]TaskInfo, 0)
 
-		err := conn.Select(&data, "SELECT task.* FROM task ORDER BY start_date")
+		err := conn.Select(&data, "SELECT task.* FROM task ORDER BY parent, position")
 		if err != nil {
 			format.Text(w, 500, err.Error())
 			return
@@ -148,7 +149,7 @@ func main() {
 	})
 
 	r.Put("/tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
+		id := NumberParam(r, "id")
 		r.ParseForm()
 
 		err = sendUpdateQuery("task", r.Form, id)
@@ -161,7 +162,7 @@ func main() {
 	})
 
 	r.Put("/tasks/{id}/split", func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
+		id := NumberParam(r, "id")
 		r.ParseForm()
 		nid, sibling, err := splitTask(id, r.Form)
 		if err != nil {
@@ -169,11 +170,11 @@ func main() {
 			return
 		}
 
-		format.JSON(w, 200, AddResponse{ID: strconv.FormatInt(nid, 10), Sibling: strconv.FormatInt(sibling, 10)})
+		format.JSON(w, 200, AddResponse{ID: nid, Sibling: sibling})
 	})
 
 	r.Delete("/tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
+		id := NumberParam(r, "id")
 
 		_, err := conn.Exec("DELETE FROM task WHERE id = ? OR parent = ?", id, id)
 		if err != nil {
@@ -202,9 +203,35 @@ func main() {
 			format.Text(w, 500, err.Error())
 			return
 		}
-
 		id, _ := res.LastInsertId()
-		format.JSON(w, 200, Response{ID: strconv.FormatInt(id, 10)})
+
+		mode := r.Form.Get("mode")
+		parent := NumberFromForm(r.Form, "parent", 0)
+
+		err = setPosition(int(id), mode, parent)
+		if err != nil {
+			format.Text(w, 500, err.Error())
+			return
+		}
+
+		format.JSON(w, 200, Response{ID: int(id)})
+	})
+
+	r.Put("/tasks/{id}/position", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+
+		id := NumberParam(r, "id")
+		target := NumberFromForm(r.Form, "target", 0)
+		parent := NumberFromForm(r.Form, "parent", -1)
+		mode := r.Form.Get("mode")
+
+		err := sendMoveQuery(id, mode, target, parent)
+		if err != nil {
+			format.Text(w, 500, err.Error())
+			return
+		}
+
+		format.JSON(w, 200, Response{ID: id})
 	})
 
 	r.Get("/links", func(w http.ResponseWriter, r *http.Request) {
@@ -220,7 +247,7 @@ func main() {
 	})
 
 	r.Put("/links/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
+		id := NumberParam(r, "id")
 		r.ParseForm()
 
 		err := sendUpdateQuery("link", r.Form, id)
@@ -233,7 +260,7 @@ func main() {
 	})
 
 	r.Delete("/links/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
+		id := NumberParam(r, "id")
 
 		_, err := conn.Exec("DELETE FROM link WHERE id = ?", id)
 		if err != nil {
@@ -254,7 +281,7 @@ func main() {
 		}
 
 		id, _ := res.LastInsertId()
-		format.JSON(w, 200, Response{ID: strconv.FormatInt(id, 10)})
+		format.JSON(w, 200, Response{ID: int(id)})
 	})
 
 	r.Get("/resources", func(w http.ResponseWriter, r *http.Request) {
@@ -294,7 +321,7 @@ func main() {
 	})
 
 	r.Put("/assignments/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
+		id := NumberParam(r, "id")
 		r.ParseForm()
 
 		err := sendUpdateQuery("assignment", r.Form, id)
@@ -307,7 +334,7 @@ func main() {
 	})
 
 	r.Delete("/assignments/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
+		id := NumberParam(r, "id")
 
 		_, err := conn.Exec("DELETE FROM assignment WHERE id = ?", id)
 		if err != nil {
@@ -328,11 +355,85 @@ func main() {
 		}
 
 		id, _ := res.LastInsertId()
-		format.JSON(w, 200, Response{ID: strconv.FormatInt(id, 10)})
+		format.JSON(w, 200, Response{ID: int(id)})
 	})
 
 	log.Printf("Starting webserver at port " + Config.Port)
 	http.ListenAndServe(Config.Port, r)
+}
+
+func setPosition(id int, mode string, parent int) error {
+	if mode == "last" {
+		var relatedPosition int
+		row := conn.QueryRow("SELECT MAX(position)+1 from task WHERE parent = ?", parent)
+		row.Scan(&relatedPosition)
+
+		_, err := conn.Exec("UPDATE task SET position = ? WHERE id = ?", relatedPosition, id)
+		return err
+	} else if mode == "first" || mode == "" {
+		_, err := conn.Exec("UPDATE task SET position = position + 1 WHERE parent = ? AND id <> ?", parent, id)
+		return err
+	}
+
+	return errors.New("not supported position mode")
+}
+
+func sendMoveQuery(id int, mode string, target, parent int) error {
+	var basePosition, baseParent int
+	row := conn.QueryRow("SELECT parent, position from task WHERE id = ?", id)
+	err := row.Scan(&baseParent, &basePosition)
+	if err != nil {
+		return err
+	}
+
+	var relatedPosition, relatedParent int
+	relatedParent = parent
+	if relatedParent == -1 {
+		relatedParent = baseParent
+	}
+
+	if mode == "before" || mode == "after" {
+		row := conn.QueryRow("SELECT parent, position from task WHERE id = ?", target)
+		err = row.Scan(&relatedParent, &relatedPosition)
+		if err != nil {
+			return err
+		}
+
+		if mode == "after" {
+			relatedPosition += 1
+		}
+	} else if mode == "last" {
+		row := conn.QueryRow("SELECT MAX(position)+1 from task WHERE parent = ?", parent)
+		row.Scan(&relatedPosition)
+	}
+
+	// source item removing may affect target index
+	if relatedParent == baseParent && (mode == "last" || basePosition < relatedPosition) {
+		relatedPosition -= 1
+	}
+
+	// already in place
+	if relatedParent == baseParent && relatedPosition == basePosition {
+		return nil
+	}
+
+	// removing from source order
+	_, err = conn.Exec("UPDATE task SET position = position - 1 WHERE position > ? AND parent = ?", basePosition, baseParent)
+	if err != nil {
+		return err
+	}
+	// correct target order
+	_, err = conn.Exec("UPDATE task SET position = position + 1 WHERE position >= ? AND parent = ?", relatedPosition, relatedParent)
+	if err != nil {
+		return err
+	}
+	// adding at target position
+	_, err = conn.Exec("UPDATE task SET position = ?, parent = ? WHERE id = ?", relatedPosition, relatedParent, id)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // both task and link tables
@@ -345,7 +446,6 @@ var whitelistTask = []string{
 	"opened",
 	"details",
 	"type",
-	"position",
 }
 var whitelistLink = []string{
 	"source",
@@ -368,7 +468,7 @@ func getWhiteList(table string) []string {
 	return whiteListAssignment
 }
 
-func sendUpdateQuery(table string, form url.Values, id string) error {
+func sendUpdateQuery(table string, form url.Values, id int) error {
 	qs := "UPDATE " + table + " SET "
 	params := make([]interface{}, 0)
 
@@ -408,7 +508,7 @@ func sendInsertQuery(table string, form map[string][]string) (sql.Result, error)
 	return res, err
 }
 
-func splitTask(parent string, form url.Values) (int64, int64, error) {
+func splitTask(parent int, form url.Values) (int, int, error) {
 	var sibling int64
 
 	// update parent - set it as type "split"
@@ -438,5 +538,21 @@ func splitTask(parent string, form url.Values) (int64, int64, error) {
 	}
 	id, _ := res.LastInsertId()
 
-	return id, sibling, nil
+	return int(id), int(sibling), nil
+}
+
+func NumberParam(r *http.Request, key string) int {
+	value := chi.URLParam(r, key)
+	num, _ := strconv.Atoi(value)
+
+	return num
+}
+
+func NumberFromForm(r url.Values, key string, defValue int) int {
+	value := r.Get(key)
+	if value == "" {
+		return defValue
+	}
+	num, _ := strconv.Atoi(value)
+	return num
 }
